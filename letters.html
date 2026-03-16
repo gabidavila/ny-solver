@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Letter Boxed</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#e8a89c;font-family:Georgia,serif;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:20px;color:#fff}
+h1{font-size:22px;font-weight:700;margin-bottom:4px;letter-spacing:1px}
+.subtitle{font-size:13px;opacity:.8;margin-bottom:16px}
+.word-input{background:transparent;border:none;border-bottom:2px solid #fff;color:#fff;font-size:22px;text-align:center;width:260px;outline:none;letter-spacing:3px;caret-color:#fff;margin-bottom:4px}
+.word-input::placeholder{color:rgba(255,255,255,.4);letter-spacing:1px}
+.hint{font-size:12px;opacity:.7;margin-bottom:6px;min-height:16px}
+.words-used{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin-bottom:8px;min-height:24px;max-width:360px}
+.word-chip{background:rgba(255,255,255,.25);border-radius:12px;padding:2px 10px;font-size:13px;letter-spacing:1px}
+.board-wrap{position:relative;width:280px;height:280px;margin:4px auto}
+#board-svg{width:280px;height:280px}
+.btns{display:flex;gap:12px;margin-top:12px}
+.btn{background:rgba(255,255,255,.2);border:1.5px solid rgba(255,255,255,.5);color:#fff;font-size:14px;padding:8px 22px;border-radius:20px;cursor:pointer;font-family:Georgia,serif;transition:background .15s}
+.btn:hover{background:rgba(255,255,255,.35)}
+.btn-solve{background:rgba(255,255,255,.3)}
+.solution-box{background:rgba(255,255,255,.2);border-radius:12px;padding:12px 18px;margin-top:10px;max-width:340px;font-size:14px;line-height:1.9;display:none;text-align:center}
+.solution-box strong{font-size:15px;display:block;margin-bottom:6px}
+.setup-panel{background:rgba(255,255,255,.18);border-radius:14px;padding:14px 18px;margin-bottom:14px;width:320px}
+.setup-panel label{font-size:12px;opacity:.8;display:block;margin-bottom:3px}
+.side-inputs{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px}
+.side-input{background:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.5);color:#fff;font-size:16px;text-align:center;letter-spacing:3px;padding:6px 8px;border-radius:8px;outline:none;width:100%;text-transform:uppercase}
+.side-input::placeholder{color:rgba(255,255,255,.4);letter-spacing:1px;text-transform:none;font-size:12px}
+.btn-start{width:100%;margin-top:4px;border-radius:10px;padding:10px}
+.won-msg{font-size:18px;font-weight:700;margin-top:10px;display:none;text-align:center}
+.letters-left{font-size:11px;opacity:.7;margin-bottom:4px;letter-spacing:1px}
+.sol-word{display:inline-block;background:rgba(255,255,255,.25);border-radius:10px;padding:2px 10px;margin:2px;font-size:14px;letter-spacing:1px}
+</style>
+</head>
+<body>
+<h1>LETTER BOXED</h1>
+<p class="subtitle">Connect letters · No same-side consecutive · Use all 12</p>
+
+<div id="dict-status" style="font-size:11px;opacity:.7;margin-bottom:8px;"></div>
+<div class="setup-panel" id="setup-panel">
+  <label>Enter 3 letters per side (top · right · bottom · left)</label>
+  <div class="side-inputs">
+    <input class="side-input" id="sTop" maxlength="3" placeholder="Top (e.g. WMY)">
+    <input class="side-input" id="sRight" maxlength="3" placeholder="Right (e.g. TOI)">
+    <input class="side-input" id="sBottom" maxlength="3" placeholder="Bottom (e.g. HND)">
+    <input class="side-input" id="sLeft" maxlength="3" placeholder="Left (e.g. SLR)">
+  </div>
+  <button class="btn btn-start" onclick="startGame()">Start Game</button>
+</div>
+
+<div id="game-area" style="display:none;align-items:center;flex-direction:column;width:100%">
+  <input class="word-input" id="word-input" placeholder="click letters…" readonly>
+  <div class="hint" id="hint"></div>
+  <div class="letters-left" id="letters-left"></div>
+  <div class="words-used" id="words-used"></div>
+  <div class="board-wrap">
+    <svg id="board-svg" viewBox="0 0 280 280"></svg>
+  </div>
+  <div class="btns">
+    <button class="btn" onclick="deleteLastLetter()">Delete</button>
+    <button class="btn" onclick="submitWord()">Enter</button>
+    <button class="btn" onclick="restartGame()">Restart</button>
+  </div>
+  <button class="btn btn-solve" style="margin-top:10px" onclick="showSolution()">Show Solution</button>
+  <div class="solution-box" id="solution-box"></div>
+  <div class="won-msg" id="won-msg">🎉 Solved! All letters used!</div>
+</div>
+
+<script>
+const SIDE_MARGIN=40, BOX=200;
+let sides=[], allLetters=[], sideOf={}, letterPos={};
+let currentWord=[], usedLetters=new Set(), submittedWords=[];
+let lastSubmittedLastLetter=null, dictionary=[];
+
+function sidePositions(side,idx){
+  const s=SIDE_MARGIN,e=s+BOX;
+  const p=[s+BOX*0.25,s+BOX*0.5,s+BOX*0.75];
+  if(side===0)return{x:p[idx],y:s};
+  if(side===1)return{x:e,y:p[idx]};
+  if(side===2)return{x:p[2-idx],y:e};
+  return{x:s,y:p[2-idx]};
+}
+
+function hasDupeLetter(w){return new Set(w).size!==w.length;}
+
+function isValidBoardWord(w){
+  const u=w.toUpperCase();
+  for(let i=0;i<u.length;i++){
+    if(!sideOf.hasOwnProperty(u[i]))return false;
+    if(i>0&&sideOf[u[i-1]]===sideOf[u[i]])return false;
+  }
+  return true;
+}
+
+// Only keep words that can actually be formed on current board
+function buildValidWordList(){
+  return dictionary.filter(w=>isValidBoardWord(w));
+}
+
+const DICT_URL='https://storage.googleapis.com/claudeplayground/word_dictionary.txt';
+let dictReady=false;
+
+async function preloadDictionary(){
+  try{
+    const r=await fetch(DICT_URL);
+    const txt=await r.text();
+    dictionary=txt.split('\n').map(w=>w.trim().toLowerCase()).filter(w=>w.length>0);
+    dictReady=true;
+    const btn=document.querySelector('.btn-start');
+    btn.textContent='Start Game';btn.disabled=false;
+  }catch(e){
+    console.warn('Remote dict failed, using built-in',e);
+    document.getElementById('dict-status').textContent='Dict error: '+e.message+' | '+e.name;
+    dictionary=BUILTIN_DICT.filter(w=>w.length>=3&&!hasDupeLetter(w));
+    dictReady=true;
+    const btn=document.querySelector('.btn-start');
+    btn.textContent='Start Game (built-in dict)';btn.disabled=false;
+  }
+}
+
+(()=>{
+  const btn=document.querySelector('.btn-start');
+  btn.textContent='Loading dictionary…';btn.disabled=true;
+  preloadDictionary();
+})();
+
+function startGame(){
+  const top=document.getElementById('sTop').value.toUpperCase().replace(/[^A-Z]/g,'').slice(0,3);
+  const right=document.getElementById('sRight').value.toUpperCase().replace(/[^A-Z]/g,'').slice(0,3);
+  const bottom=document.getElementById('sBottom').value.toUpperCase().replace(/[^A-Z]/g,'').slice(0,3);
+  const left=document.getElementById('sLeft').value.toUpperCase().replace(/[^A-Z]/g,'').slice(0,3);
+  if([top,right,bottom,left].some(s=>s.length!==3)){alert('Please enter exactly 3 letters per side.');return;}
+  const all=(top+right+bottom+left).split('');
+  if(new Set(all).size!==12){alert('All 12 letters must be unique.');return;}
+  sides=[top,right,bottom,left];
+  allLetters=all;
+  sideOf={};letterPos={};
+  sides.forEach((s,si)=>s.split('').forEach((l,li)=>{
+    sideOf[l]=si;
+    letterPos[l]=sidePositions(si,li);
+  }));
+  if(!dictReady)dictionary=BUILTIN_DICT.filter(w=>w.length>=3&&!hasDupeLetter(w));
+  usedLetters=new Set();submittedWords=[];currentWord=[];lastSubmittedLastLetter=null;
+  document.getElementById('setup-panel').style.display='none';
+  const ga=document.getElementById('game-area');
+  ga.style.display='flex';
+  document.getElementById('won-msg').style.display='none';
+  document.getElementById('solution-box').style.display='none';
+  document.getElementById('words-used').innerHTML='';
+  renderBoard();updateLettersLeft();
+}
+
+function restartGame(){
+  document.getElementById('setup-panel').style.display='block';
+  document.getElementById('game-area').style.display='none';
+}
+
+function renderBoard(dashedWord=[]){
+  const svg=document.getElementById('board-svg');
+  const s=SIDE_MARGIN,e=s+BOX;
+  svg.innerHTML='';
+  const mk=(tag,attrs)=>{const el=document.createElementNS('http://www.w3.org/2000/svg',tag);Object.entries(attrs).forEach(([k,v])=>el.setAttribute(k,v));return el;};
+  svg.appendChild(mk('rect',{x:s,y:s,width:BOX,height:BOX,fill:'rgba(255,255,255,0.85)',stroke:'#555',rx:'6','stroke-width':'2'}));
+
+  // solid lines from submitted words
+  submittedWords.forEach(word=>{
+    for(let i=0;i<word.length-1;i++){
+      const pa=letterPos[word[i]],pb=letterPos[word[i+1]];
+      svg.appendChild(mk('line',{x1:pa.x,y1:pa.y,x2:pb.x,y2:pb.y,stroke:'#c0392b','stroke-width':'2.5'}));
+    }
+  });
+  // connector dot between words
+  if(lastSubmittedLastLetter&&currentWord.length===0){
+    const p=letterPos[lastSubmittedLastLetter];
+    svg.appendChild(mk('circle',{cx:p.x,cy:p.y,r:'5',fill:'#c0392b'}));
+  }
+
+  // dashed lines for current word
+  if(dashedWord.length>1){
+    for(let i=0;i<dashedWord.length-1;i++){
+      const pa=letterPos[dashedWord[i]],pb=letterPos[dashedWord[i+1]];
+      svg.appendChild(mk('line',{x1:pa.x,y1:pa.y,x2:pb.x,y2:pb.y,stroke:'#e74c3c','stroke-width':'2','stroke-dasharray':'5,4',opacity:'0.75'}));
+    }
+  }
+
+  sides.forEach((side,si)=>{
+    side.split('').forEach((letter,li)=>{
+      const pos=sidePositions(si,li);
+      const used=usedLetters.has(letter);
+      const isActive=dashedWord.length>0&&dashedWord[dashedWord.length-1]===letter;
+      const isStart=lastSubmittedLastLetter===letter&&currentWord.length===0;
+      const fill=isActive?'#e74c3c':isStart?'#e74c3c':used?'rgba(255,255,255,0.55)':'white';
+      const txtFill=isActive||isStart?'white':used?'rgba(90,40,30,0.85)':'#222';
+      const circ=mk('circle',{cx:pos.x,cy:pos.y,r:'11',fill,stroke:'#555','stroke-width':'1.5',cursor:'pointer'});
+      circ.addEventListener('click',()=>clickLetter(letter));
+      svg.appendChild(circ);
+      const txt=mk('text',{x:pos.x,y:pos.y+1,'text-anchor':'middle','dominant-baseline':'middle','font-size':'13','font-weight':'700','font-family':'Georgia,serif',fill:txtFill,'pointer-events':'none'});
+      txt.textContent=letter;
+      svg.appendChild(txt);
+    });
+  });
+}
+
+function clickLetter(letter){
+  if(document.getElementById('won-msg').style.display!=='none')return;
+  if(lastSubmittedLastLetter&&currentWord.length===0&&letter!==lastSubmittedLastLetter){
+    setHint(`Next word must start with "${lastSubmittedLastLetter}"`);return;
+  }
+  if(currentWord.length>0){
+    const prev=currentWord[currentWord.length-1];
+    if(prev===letter){setHint('Cannot repeat last letter');return;}
+    if(sideOf[prev]===sideOf[letter]){setHint('Must alternate sides');return;}
+  }
+  currentWord.push(letter);
+  document.getElementById('word-input').value=currentWord.join('');
+  setHint('');
+  renderBoard(currentWord);
+}
+
+function deleteLastLetter(){
+  if(currentWord.length>0){
+    currentWord.pop();
+    document.getElementById('word-input').value=currentWord.join('');
+    setHint('');renderBoard(currentWord);
+  }
+}
+
+function submitWord(){
+  if(currentWord.length<3){setHint('Word must be at least 3 letters');return;}
+  const word=currentWord.join('').toLowerCase();
+  if(!dictionary.includes(word)&&!isValidBoardWord(word)){setHint('Not a valid word');return;}
+  if(!isValidBoardWord(word)){setHint('Invalid sequence');return;}
+  submittedWords.push([...currentWord]);
+  currentWord.forEach(l=>usedLetters.add(l));
+  lastSubmittedLastLetter=currentWord[currentWord.length-1];
+  const chip=document.createElement('div');
+  chip.className='word-chip';
+  chip.textContent=currentWord.join('');
+  document.getElementById('words-used').appendChild(chip);
+  currentWord=[];
+  document.getElementById('word-input').value='';
+  setHint('');updateLettersLeft();renderBoard();
+  if(usedLetters.size===12)document.getElementById('won-msg').style.display='block';
+}
+
+function setHint(msg){document.getElementById('hint').textContent=msg;}
+
+function updateLettersLeft(){
+  const rem=allLetters.filter(l=>!usedLetters.has(l));
+  document.getElementById('letters-left').textContent=rem.length>0?`Remaining: ${rem.join(' ')}`:'All letters used!';
+}
+
+// ── SOLVER ──────────────────────────────────────────────────────────────────
+function showSolution(){
+  const box=document.getElementById('solution-box');
+  box.style.display='block';
+  box.innerHTML='<strong>Solving…</strong>';
+  setTimeout(()=>{
+    const sol=solve();
+    if(!sol||sol.length===0){
+      box.innerHTML='<strong>No solution found with this dictionary.</strong><br><small>Try the game manually — the puzzle may use uncommon words.</small>';
+      return;
+    }
+    const chips=sol.map(w=>`<span class="sol-word">${w.toUpperCase()}</span>`).join(' → ');
+    box.innerHTML=`<strong>Best solution (${sol.length} word${sol.length>1?'s':''})</strong><br>${chips}`;
+  },30);
+}
+
+function solve(){
+  const validWords=buildValidWordList();
+  // sort by coverage descending for better pruning
+  const allSet=new Set(allLetters.map(l=>l.toLowerCase()));
+  const coverage=w=>{const s=new Set(w);return [...s].filter(c=>allSet.has(c)).length;};
+  validWords.sort((a,b)=>coverage(b)-coverage(a));
+
+  // Build index: startLetter -> words
+  const byStart={};
+  validWords.forEach(w=>{
+    const c=w[0];
+    if(!byStart[c])byStart[c]=[];
+    byStart[c].push(w);
+  });
+
+  for(let maxLen=1;maxLen<=8;maxLen++){
+    const res=dfs(byStart,allSet,[],new Set(),null,maxLen);
+    if(res)return res;
+  }
+  return null;
+}
+
+function dfs(byStart,allSet,words,covered,lastLetter,maxLen){
+  if(covered.size===allSet.size)return words;
+  if(words.length>=maxLen)return null;
+  const remaining=maxLen-words.length;
+  const candidates=lastLetter?(byStart[lastLetter]||[]):Object.values(byStart).flat();
+  for(const w of candidates){
+    const newCov=new Set(covered);
+    w.split('').filter(c=>allSet.has(c)).forEach(c=>newCov.add(c));
+    const gain=newCov.size-covered.size;
+    if(gain===0)continue; // prune: word adds nothing
+    // pruning: even if remaining words each cover max possible (12), can we finish?
+    const maxPossibleGain=(allSet.size-newCov.size);
+    if(remaining-1===0&&newCov.size<allSet.size)continue;
+    const res=dfs(byStart,allSet,[...words,w],newCov,w[w.length-1],maxLen);
+    if(res)return res;
+  }
+  return null;
+}
+
+// ── KEYBOARD ────────────────────────────────────────────────────────────────
+document.addEventListener('keydown',e=>{
+  if(document.getElementById('game-area').style.display==='none')return;
+  if(e.key==='Enter'){e.preventDefault();submitWord();}
+  else if(e.key==='Backspace'){e.preventDefault();deleteLastLetter();}
+});
+
+// ── DICTIONARY ──────────────────────────────────────────────────────────────
+// ~2000 common English words, 3+ letters, no repeated letters
+const BUILTIN_DICT=`abet,able,ably,aces,ache,acid,acne,acre,acts,aeon,afar,aged,ages,agio,aglow,ago,ague,ahoy,aids,aims,airs,airy,akin,albs,alder,alec,alef,ales,alga,alky,alms,aloe,alps,also,ambo,amen,amid,amok,amps,angel,angle,angry,angst,anew,ankh,ante,anti,apex,arch,arcs,ares,aria,arid,arms,army,arty,ashy,asks,atom,atop,auks,avid,awls,awry,axle,axed,
+bade,bail,bale,balk,balm,band,bane,bang,bard,bare,barf,bark,barm,barn,base,bash,bask,bath,baud,bawl,bead,beak,bean,beat,beck,belt,berg,bias,bide,bile,bind,birch,bird,bite,blah,blot,blow,blue,boar,body,bold,bolt,bong,bore,born,bosh,both,brad,brag,bran,bray,brew,brig,brim,brow,buck,bulge,bulk,burn,burp,bust,byte,
+cafe,cage,cake,calf,calm,came,cane,cape,card,care,carp,cart,case,cash,cast,cave,celt,cent,chad,chef,chew,chin,chip,chit,chop,chow,cite,clam,clap,clew,clip,clod,clog,clop,clot,cloy,club,clue,coal,coat,coil,coin,coke,cold,colt,come,cone,cope,cord,core,corm,corn,cost,cots,coup,cove,cozy,crab,crag,cram,craw,cred,crew,crib,crop,crow,crux,cube,cued,cues,cult,cups,curb,cure,curl,cusk,cuts,
+dabs,daft,dame,damp,dang,dank,dare,dark,darn,dart,dash,daze,deft,deli,deny,dike,dime,dint,dire,dirk,disc,disk,diva,dock,dolt,dome,dong,dory,dote,dove,doze,drip,drub,drum,dual,dump,dung,dusk,dust,
+each,earl,earn,east,ebon,edgy,elan,elms,else,emir,emit,envy,epic,even,evil,eyot,
+fads,fake,fang,farm,fast,fate,fawn,faze,feat,fend,fern,fest,feud,fife,file,film,find,fink,firm,fish,fist,flak,flaw,flex,flop,flow,flux,foal,foam,fond,ford,fore,form,fort,foul,fowl,fray,fret,frog,fuel,fume,funk,furl,fury,fuse,
+gabs,gait,gale,gash,gasp,gawk,gaze,gear,glib,glob,glow,glut,gnaw,goal,gobs,gory,gosh,gout,gown,grab,gram,gray,grim,grip,grit,grog,grow,grub,gulf,gulp,gush,gust,gybe,
+hack,hale,half,halt,harp,hash,hasp,have,hawk,haze,hazy,heap,heat,helm,hemp,herd,hewn,hide,hike,hilt,hire,hoar,hoax,hold,horn,hose,howl,hulk,hump,hung,hunk,hunt,hurl,
+idea,idle,idly,ikon,imam,inky,into,iron,item,
+jade,jest,jibe,jilt,jibs,jink,jinx,jive,join,jolt,jowl,judo,junk,just,
+kale,kelp,kept,kerf,kern,kind,king,kink,knew,knit,knob,know,
+lack,lame,lamp,land,lard,lark,lash,lave,lawn,laze,lazy,leaf,lean,leap,ling,lint,lion,lira,lisp,list,loft,loin,lore,lorn,lory,lout,love,lump,lung,lure,lush,lust,
+mace,made,magi,malt,mash,mask,mast,math,maul,mend,mesh,mild,mine,mink,mint,mire,mist,moan,moat,mode,mole,molt,monk,mope,morn,mule,mung,myth,
+nail,nape,nark,nave,next,nice,nobs,noir,nope,norm,note,numb,
+oafs,oaks,oars,oath,obey,oboe,okay,once,only,orbs,orca,oven,oxide,
+pace,pack,pact,page,palm,pang,park,part,past,pave,pawn,peak,pelt,perk,pest,pick,pied,pier,pike,pith,plan,plat,play,plot,plow,ploy,plum,poky,pond,pony,pore,port,pose,posh,pour,pray,prey,prig,prod,prom,prop,prow,pubs,pulp,pump,push,
+quad,quake,quay,quit,
+rads,ramp,rand,rang,rant,rash,rave,rays,raze,real,reap,rend,reps,rest,rift,ring,riot,rise,risk,rite,roan,robe,rode,romp,rope,rosy,rove,ruin,rump,rune,rung,rush,rust,ruts,
+sage,sail,sake,sale,salt,sand,sank,sari,sash,save,seal,seam,sect,send,shin,shiv,shod,shop,show,sing,skid,skim,skin,skip,slab,slam,slap,slat,slim,slip,slit,slob,slop,slur,slug,smug,snag,snap,snip,snow,soak,soap,soar,soft,soil,sold,solo,sort,soul,soup,sown,spat,span,spit,spot,spud,spur,star,stay,stem,step,stew,stir,stop,stub,stud,stun,suck,sulk,sung,sunk,sure,swim,
+tack,talc,tale,tamp,tare,tarn,tart,task,taut,teal,than,they,thin,thud,thug,tidy,tier,tile,tilt,time,tine,tiny,tire,tofu,toke,told,tole,tomb,tome,tong,torn,tram,trap,trek,trim,trio,trip,trod,tuft,tule,tuna,tune,turf,twig,type,
+ugly,ulna,upon,urea,
+vale,vane,veto,view,vine,
+wail,wain,wake,wane,warp,wary,wasp,weld,wend,wham,whet,whim,whin,whip,whom,wick,wile,wilt,wimp,wink,wipe,wire,wiry,wish,woad,woke,worn,wort,wren,
+yawl,yell,yelp,yeti,yore,
+zeal,zero,zest,zone,
+abed,abel,abet,ably,abut,acme,acorn,acrid,acros,acyl,adit,admix,adobe,adopt,adorn,adroit,adsorb,adult,aegis,aeon,aero,agar,agent,agile,agist,aglow,agony,agree,agile,aide,aim,airway,akimbo,alang,alarm,alary,alate,albedo,albeit,alec,alert,alews,align,alike,alit,alive,allay,allot,allow,aloft,alone,along,aloud,alum,alway,amaze,amber,amend,amend,amice,amine,amity,among,ample,amuse,angel,angst,anime,anise,anklet,annex,antic,anvil,apart,aping,apron,arbor,ardor,argot,arise,arson,arty,ascot,ashen,aspen,aspic,assay,astir,atlas,atone,atrium,attic,audio,audit,augur,avail,avian,avid,avow,awake,aware,awful,awing,
+baker,bales,bandy,banjo,barmy,baron,baste,baton,batty,bayou,beady,belch,below,bench,bendy,bevel,bicep,bingo,bison,bitty,blaze,blimp,blink,bliss,blown,blunt,blurt,bodkin,bogey,bogus,boink,boney,boney,bonny,borax,botch,bower,boyish,brash,bravo,brawn,braze,brisk,broth,brunt,bulky,bully,bumpy,buoy,burly,burly,
+cache,cadet,cairn,calyx,cameo,campy,candy,canoe,cargo,carob,carom,carol,caste,catnip,cauldron,cauterize,cavy,cedar,celty,chafe,champ,chant,chaos,chard,charm,chart,chase,chasm,chasten,chisel,chord,chose,chump,churn,cider,cinch,civil,clank,cleft,clerk,climb,clink,cloak,cloud,clout,coax,cobalt,cobra,cobia,coign,comet,comic,comfy,confer,conga,corny,cozy,crimp,crisp,crone,crony,cross,crowd,crown,cubic,curly,
+daily,daisy,dandy,debut,decal,decry,deity,delta,demon,depot,derby,desks,devil,dogma,dogwood,done,dorky,dowel,downs,downward,drafty,drape,draw,dray,drove,drowsy,duchy,dumpy,dunce,duple,dwindle,
+early,elect,emend,emory,empty,endow,enjoy,entry,ergot,ethyl,evict,exact,exalt,exert,exist,expel,extol,
+fable,facet,faint,famed,fancy,first,fishy,fjord,flank,flair,flask,flaunt,flesh,flint,flair,flora,flout,fluid,flunk,flute,focus,folio,folly,folks,forte,forum,found,foyer,fraud,fresh,frill,frisk,frond,front,frost,froth,froze,frump,
+gamut,gaudy,gavel,gecko,gentry,genial,genus,germy,gilts,gimpy,girly,gland,glare,glean,glint,gloat,gloom,glory,glove,going,gorge,gouge,governess,grace,grail,grain,grant,grasp,grate,grave,gravel,great,greed,greet,groan,groin,groom,grout,growl,gruel,gruff,grunge,guise,gusto,guile,guild,guile,
+handy,haunt,haven,hazel,heist,helot,hence,heron,hertz,hints,hoard,hoary,hobby,holly,homer,homey,hornet,hovels,howdy,humid,hurry,
+icily,impel,inane,indie,inept,inert,infuse,ingot,inlet,intel,intro,
+jaunt,jerky,jiffy,jingo,jocund,jolts,judge,jowly,
+kicky,knave,kneel,knelt,knife,kneel,
+lacing,lanky,lapdog,larch,largo,later,lathe,lathy,leach,leafy,least,ledge,legal,lemon,lemur,level,light,lilac,limy,lingo,litmus,lithe,lively,livid,loamy,loath,lobby,locus,lodge,logic,loner,loamy,lucky,lumpy,lusty,
+magic,maize,mangy,manor,maple,marsh,mason,mealy,melon,mercy,meryl,metal,metro,mirth,miser,moist,moldy,money,moody,morel,morph,moult,mousy,moult,mucky,muddy,mulch,murky,mushy,musky,musty,
+needy,nerdy,nervy,never,nexus,nicer,nitwit,noble,nodule,noisy,novel,nudge,
+often,olive,onset,optic,orbit,organ,ought,outdo,outgo,
+paddy,pansy,parody,parse,pasty,pathfinder,patio,patsy,pauper,penal,perky,pesky,petty,phony,piano,pilfer,pilot,pinch,piney,piranha,poise,polar,polka,poplar,postal,posture,potent,pouty,privy,prowl,prude,prune,psalm,pulse,punchy,pupil,purge,purity,
+qualm,query,quest,queue,quirk,quite,quotient,
+rabid,rainy,rally,raspy,ratify,raven,rawly,ready,rebut,reedy,relay,renew,repay,repel,resin,retro,rigid,ripen,risky,rival,robin,rocky,rodeo,rogue,roman,rotary,rowdy,ruddy,rugged,runny,rusty,
+sadly,sandy,satiny,scald,scalp,scaly,scant,scary,scone,scorn,scout,scowl,scrap,scrum,seedy,selfish,semi,serum,setup,sever,shady,shaky,shame,sharp,sheaf,shift,shiny,shoal,shone,showy,shrug,shrunk,shard,sicken,sigma,silky,sissy,sixth,sixty,skins,skull,slacken,slain,slant,slave,sleek,slept,slick,slime,slimy,sliver,slope,sloth,slunk,slyly,smack,smart,smear,smith,smock,smoke,smoky,snaky,snare,snark,sneak,snore,snort,snout,snowy,snub,soggy,solid,sonic,solve,spare,spark,speak,speck,speed,spire,spite,splint,spoil,spoke,spore,sport,spout,sprawl,sprig,spry,spunk,squat,squid,stark,staid,stale,stalk,stamen,stand,stank,stark,stave,steal,steep,stench,stern,stilt,sting,stoic,stoke,stole,stony,stork,storm,story,stout,stove,strap,stray,strip,strive,strop,struck,strut,stunt,surge,surly,swear,sweat,sweep,swept,swipe,swirl,swoon,sword,swore,
+tacky,talon,tangy,tardy,tawny,taunt,thorn,threw,throw,toady,tonal,topaz,topic,torch,totem,toxic,trail,train,trait,tramp,trawl,tread,treck,trend,trial,trice,trick,trill,tripe,troth,trout,truly,trunk,tryst,tuber,tumor,tunic,turbo,tusks,tweak,twirl,twitch,
+umbra,uncut,under,unfair,unfit,unkempt,unlink,unsay,until,unwed,
+valor,vanish,vapid,vault,vaunt,video,vigor,viral,visor,vital,vivid,voila,vouch,
+wacky,wader,waltz,weird,welsh,whack,wheat,where,while,whole,whose,wider,windy,withhold,witty,wonky,woody,wooly,wordy,wormy,
+yacht,yield,young,
+zippy,zonal`.split(',').map(w=>w.trim().toLowerCase()).filter(w=>w.length>=3&&!hasDupeLetter(w)&&/^[a-z]+$/.test(w));
+</script>
+</body>
+</html>
